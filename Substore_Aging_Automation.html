@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Substore Aging – Auto Cleanup</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--ink:#16202c;--mute:#5d6b7a;--line:#d9e0e7;--acc:#0a6c74;--acc-ink:#fff;--warn:#b45309;--ok:#157347;--soft:#e6f2f3}
+@media (prefers-color-scheme:dark){:root{--bg:#0e141b;--card:#161e27;--ink:#e6ecf2;--mute:#93a1b0;--line:#27323e;--acc:#3fb8c2;--acc-ink:#06232a;--warn:#f0a04b;--ok:#5cc28a;--soft:#13292e}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:18px 24px 6px}
+h1{margin:0;font-size:20px;font-weight:650}
+header p{margin:2px 0 0;color:var(--mute)}
+main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:16px;padding:14px 24px 28px;align-items:start}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.card+.card{margin-top:12px}
+h2{margin:0 0 8px;font-size:14px;font-weight:650}
+.drop{display:block;border:1.5px dashed var(--line);border-radius:6px;padding:14px;text-align:center;color:var(--mute);cursor:pointer}
+.drop.over,.drop:focus-visible{border-color:var(--acc);background:var(--soft);outline:none}
+.drop b{color:var(--ink)}
+.drop input{display:none}
+textarea{width:100%;font:12px/1.5 ui-monospace,Consolas,monospace;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:8px;resize:vertical}
+label.chk{display:flex;gap:6px;align-items:center;margin-top:8px;color:var(--mute)}
+button{font:inherit;font-weight:600;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 12px;cursor:pointer}
+button.primary{background:var(--acc);color:var(--acc-ink);border-color:var(--acc)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,.tab:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.hint{color:var(--mute);font-size:12px;margin:6px 0 0}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+#msg{margin-top:6px;color:var(--mute);font-size:12px;min-height:16px}
+#msg.err{color:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.stat{border-left:3px solid var(--line);padding:2px 10px}
+.stat.k{border-color:var(--acc)}
+.stat span{display:block;color:var(--mute);font-size:12px}
+.stat strong{font-size:20px;font-variant-numeric:tabular-nums}
+#recon{margin:10px 0 0;color:var(--mute);font-size:12px}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.tab{background:none;border:1px solid transparent;border-bottom:2px solid transparent;border-radius:0;padding:6px 10px;color:var(--mute)}
+.tab[aria-selected=true]{color:var(--ink);border-bottom-color:var(--acc)}
+.wrap{overflow:auto;max-height:520px;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:max-content;min-width:100%;font-size:12px}
+th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+th{position:sticky;top:0;background:var(--soft);font-weight:650}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.empty{padding:28px;text-align:center;color:var(--mute)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Substore Aging – auto cleanup</h1>
+  <p>Drop the raw download. Filtering, SN split, de-duplication, date format and renaming run in your browser; nothing is uploaded.</p>
+</header>
+<main>
+<section>
+  <div class="card">
+    <h2>1. Raw file</h2>
+    <label class="drop" id="d1" tabindex="0"><input type="file" id="f1" accept=".zip,.xlsx"><b>Drop the raw .zip or .xlsx</b><br>or click to choose</label>
+    <div class="bar"><i id="pb"></i></div>
+    <div id="msg" role="status"></div>
+  </div>
+  <div class="card">
+    <h2>2. Rename rules</h2>
+    <p class="hint" style="margin-top:0">Serialized items: <code>pattern =&gt; New name</code>, first match wins (pattern is a case-insensitive regex).</p>
+    <textarea id="rules" rows="5" spellcheck="false"></textarea>
+    <p class="hint">Non-serialized items: <code>item_code =&gt; New name</code></p>
+    <textarea id="map" rows="8" spellcheck="false"></textarea>
+    <label class="chk"><input type="checkbox" id="incDup"> Add a “Duplicates removed” sheet to the download</label>
+    <div class="row"><button id="apply" disabled>Apply rules</button><button id="dl" class="primary" disabled>Download Excel</button></div>
+  </div>
+</section>
+<section>
+  <div class="card">
+    <div class="stats" id="stats"></div>
+    <p id="recon"></p>
+  </div>
+  <div class="card">
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="wrap" id="view"><div class="empty">Results appear here once a file is processed.</div></div>
+  </div>
+</section>
+</main>
+
+<script type="text/js-worker" id="wsrc">
+const P=(pct,msg)=>postMessage({t:'p',pct,msg});
+async function openZip(blob){
+  const n=blob.size,tl=Math.min(n,66000),tail=new DataView(await blob.slice(n-tl).arrayBuffer());
+  let i=tl-22;while(i>=0&&tail.getUint32(i,true)!==0x06054b50)i--;
+  if(i<0)throw new Error('Not a valid zip / xlsx file');
+  const cnt=tail.getUint16(i+10,true),cs=tail.getUint32(i+12,true),co=tail.getUint32(i+16,true);
+  const cd=new DataView(await blob.slice(co,co+cs).arrayBuffer()),u8=new Uint8Array(cd.buffer),td=new TextDecoder(),ents={};
+  let p=0;
+  for(let k=0;k<cnt;k++){
+    const nl=cd.getUint16(p+28,true),el=cd.getUint16(p+30,true),cl=cd.getUint16(p+32,true);
+    ents[td.decode(u8.subarray(p+46,p+46+nl))]={method:cd.getUint16(p+10,true),csize:cd.getUint32(p+20,true),usize:cd.getUint32(p+24,true),off:cd.getUint32(p+42,true)};
+    p+=46+nl+el+cl;
+  }
+  return{blob,ents};
+}
+async function rawEntry(z,e){
+  const h=new DataView(await z.blob.slice(e.off,e.off+30).arrayBuffer()),s=e.off+30+h.getUint16(26,true)+h.getUint16(28,true);
+  return z.blob.slice(s,s+e.csize);
+}
+async function entryStream(z,e){const b=await rawEntry(z,e);return e.method===0?b.stream():b.stream().pipeThrough(new DecompressionStream('deflate-raw'))}
+async function* chunks(stream){const r=stream.getReader(),d=new TextDecoder();for(;;){const x=await r.read();if(x.done)break;yield d.decode(x.value,{stream:true})}}
+async function* sis(z,cb){
+  const e=z.ents['xl/sharedStrings.xml'];if(!e)throw new Error('xl/sharedStrings.xml not found');
+  let buf='',done=0;const re=/<si(?:\/>|>([\s\S]*?)<\/si>)/g;
+  for await(const t of chunks(await entryStream(z,e))){
+    done+=t.length;buf+=t;const p=buf.lastIndexOf('</si>');if(p<0)continue;
+    const part=buf.slice(0,p+5);buf=buf.slice(p+5);let m;re.lastIndex=0;
+    while((m=re.exec(part)))yield m[1]||'';
+    cb(done/e.usize);
+  }
+  let m;re.lastIndex=0;while((m=re.exec(buf)))yield m[1]||'';
+}
+const ENT={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"};
+const dec=s=>s.replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi,(a,b)=>b[0]==='#'?String.fromCodePoint(b[1]==='x'||b[1]==='X'?parseInt(b.slice(2),16):+b.slice(1)):(ENT[b]??a));
+const txtOf=s=>{let o='',m;const r=/<t(?:\s[^>]*)?>([^<]*)<\/t>/g;s=s.replace(/<rPh[\s\S]*?<\/rPh>/g,'');while((m=r.exec(s)))o+=m[1];return dec(o)};
+const attrs=s=>{const o={};s.replace(/([\w:]+)="([^"]*)"/g,(_,k,v)=>o[k]=v);return o};
+
+onmessage=async e=>{try{await run(e.data.file)}catch(x){postMessage({t:'err',m:String(x&&x.message||x)})}};
+
+async function run(file){
+  let z=await openZip(file);
+  if(!z.ents['xl/workbook.xml']){
+    const nm=Object.keys(z.ents).find(n=>/\.xlsx$/i.test(n));
+    if(!nm)throw new Error('No .xlsx found inside the zip');
+    P(0,'Unpacking zip…');
+    const en=z.ents[nm];let b=await rawEntry(z,en);
+    if(en.method!==0)b=await new Response(b.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+    z=await openZip(b);
+  }
+  const txt=async n=>new Response(await entryStream(z,z.ents[n])).text();
+  const rel={};((await txt('xl/_rels/workbook.xml.rels')).match(/<Relationship\b[^>]*>/g)||[]).forEach(t=>{const a=attrs(t);rel[a.Id]=a.Target});
+  const sheets=((await txt('xl/workbook.xml')).match(/<sheet\b[^>]*>/g)||[]).map(t=>{const a=attrs(t);let p=rel[a['r:id']].replace(/^\//,'');if(!p.startsWith('xl/'))p='xl/'+p;return{name:a.name,path:p}});
+
+  // pass A: which shared strings contain "sdfx"
+  const flag=new Set(),head=[];let i=0;
+  for await(const s of sis(z,f=>P(f*.12,'Reading text table (1/3)…'))){if(i<64)head.push(txtOf(s));if(/sdfx/i.test(s))flag.add(i);i++}
+
+  // pass B: scan every sheet, keep rows whose substore_locator contains sdfx
+  const cell=/<c r="([A-Z]+)\d+"([^>]*)>(?:<v>([^<]*)<\/v>)?<\/c>/g;
+  const kept=[],need=new Set();let canon=null,scanned=0;
+  const tot=sheets.reduce((a,s)=>a+(z.ents[s.path]?.usize||0),0);let base=0;
+  for(const sh of sheets){
+    const e=z.ents[sh.path];if(!e)continue;
+    let buf='',done=0,names=null,map=null,locRe=null;
+    for await(const t of chunks(await entryStream(z,e))){
+      done+=t.length;buf+=t;const p=buf.lastIndexOf('</row>');
+      P(.12+.7*(base+done)/tot,`Scanning ${sh.name} – ${scanned.toLocaleString()} rows (2/3)…`);
+      if(p<0)continue;
+      const part=buf.slice(0,p);buf=buf.slice(p+6);
+      for(const r of part.split('</row>')){
+        if(r.indexOf('<c ')<0)continue;
+        if(!names){
+          names=[];let m;cell.lastIndex=0;
+          while((m=cell.exec(r))){const idx=m[1].charCodeAt(0)-65,sv=/ t="s"/.test(m[2])?head[+m[3]]:m[3];names[idx]=(sv||'').trim()}
+          const li=names.indexOf('substore_locator');
+          if(li<0){names=null;buf='';break}
+          if(!canon)canon=names.slice();
+          map=names.map(n=>canon.indexOf(n));
+          locRe=new RegExp('<c r="'+String.fromCharCode(65+li)+'\\d+"[^>]*><v>(\\d+)</v>');
+          continue;
+        }
+        scanned++;
+        const lm=locRe.exec(r);if(!lm||!flag.has(+lm[1]))continue;
+        const row=new Array(canon.length).fill(null);let m;cell.lastIndex=0;
+        while((m=cell.exec(r))){
+          const ci=map[m[1].charCodeAt(0)-65];if(ci==null||ci<0||m[3]===undefined)continue;
+          const ty=/ t="(\w+)"/.exec(m[2]);
+          if(ty&&ty[1]==='s'){row[ci]='s'+m[3];need.add(+m[3])}
+          else row[ci]=ty?dec(m[3]):Number(m[3]);
+        }
+        kept.push(row);
+      }
+      if(!names&&!canon)break;
+    }
+    base+=e.usize;
+  }
+  if(!canon)throw new Error('No sheet with a substore_locator column was found');
+
+  // pass C: resolve the text of the strings we kept
+  const got=new Map();i=0;
+  for await(const s of sis(z,f=>P(.82+.17*f,'Reading values (3/3)…'))){if(need.has(i))got.set(i,txtOf(s));i++}
+  const rows=kept.map(r=>r.map(v=>typeof v==='string'&&v[0]==='s'&&got.has(+v.slice(1))&&need.has(+v.slice(1))?got.get(+v.slice(1)):v));
+  postMessage({t:'done',hdr:canon,rows,scanned});
+}
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const DEF_RULES='iptv => Iptv\nmodem outdoor => Modem Outdoor\nwifi router => Wifi Router\n\\bont\\b => Ont';
+const DEF_MAP=['B0CALNZ9 => Outdoor Cable','B0HOFCFE3 => Outdoor Cable','B0HOFCFK5 => Outdoor Cable','TNL004771 => Outdoor Cable','TNL004907 => Outdoor Cable','B0HCCBIP4 => Connector','B0HCCBJT9 => Connector','COP001548 => Connector','B0HLANJT4 => Cat 6','B0IMPXV5 => Face Plate'].join('\n');
+const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+$('rules').value=store.get('sa_rules')||DEF_RULES;$('map').value=store.get('sa_map')||DEF_MAP;
+
+let RAW=null,OUT=null,rawName='Report_Substore_PAN_India_Aging',tab=0;
+const say=(m,err)=>{$('msg').textContent=m;$('msg').className=err?'err':''};
+
+// ---------- file inputs ----------
+function wire(zone,input,fn){
+  zone.onclick=e=>{if(e.target!==input)input.click()};
+  zone.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();input.click()}};
+  ['dragover','dragenter'].forEach(v=>zone.addEventListener(v,e=>{e.preventDefault();zone.classList.add('over')}));
+  ['dragleave','drop'].forEach(v=>zone.addEventListener(v,e=>{e.preventDefault();zone.classList.remove('over')}));
+  zone.addEventListener('drop',e=>{if(e.dataTransfer.files[0])fn(e.dataTransfer.files[0])});
+  input.onchange=()=>{if(input.files[0])fn(input.files[0]);input.value=''};
+}
+wire($('d1'),$('f1'),loadRaw);
+
+function loadRaw(file){
+  rawName=file.name.replace(/\.(zip|xlsx)$/i,'');RAW=null;OUT=null;render();
+  $('apply').disabled=$('dl').disabled=true;$('pb').style.width='0';
+  $('d1').querySelector('b').textContent=file.name;
+  const w=new Worker(URL.createObjectURL(new Blob([$('wsrc').textContent],{type:'text/javascript'})));
+  w.onmessage=e=>{
+    const d=e.data;
+    if(d.t==='p'){$('pb').style.width=(d.pct*100).toFixed(1)+'%';say(d.msg)}
+    else if(d.t==='err'){say('Could not read the file: '+d.m,true);w.terminate()}
+    else if(d.t==='done'){RAW=d;$('pb').style.width='100%';w.terminate();run()}
+  };
+  w.onerror=e=>say('Worker error: '+e.message,true);
+  say('Starting…');w.postMessage({file});
+}
+
+// ---------- the cleanup ----------
+const parseLines=t=>t.split('\n').map(l=>l.split('=>')).filter(a=>a.length>=2&&a[0].trim()).map(a=>[a[0].trim(),a.slice(1).join('=>').trim()]);
+function transform(){
+  const H=RAW.hdr,ix=n=>H.indexOf(n),iS=ix('item_sno'),iC=ix('item_code'),iD=ix('item_description');
+  let rules;try{rules=parseLines($('rules').value).map(([p,n])=>[new RegExp(p,'i'),n])}catch(e){throw new Error('Bad rule pattern: '+e.message)}
+  const map=Object.fromEntries(parseLines($('map').value));
+  const blank=[],sn=[],dups=[],seen=new Set();let renamed=0;
+  for(const r of RAW.rows){
+    const s=r[iS]==null?'':String(r[iS]).trim();
+    if(!s){blank.push(r.slice());continue}
+    if(seen.has(s)){dups.push(r.slice());continue}
+    seen.add(s);sn.push(r.slice());
+  }
+  for(const r of sn){
+    const d=String(r[iD]??'');for(const[re,n]of rules)if(re.test(d)){if(d!==n){r[iD]=n;renamed++}break}
+  }
+  const newMap={...map};
+  for(const r of blank){
+    const c=String(r[iC]??'').trim(),d=r[iD];
+    if(c in newMap&&newMap[c]!==d){r[iD]=newMap[c];renamed++}
+  }
+  $('map').value=Object.entries(newMap).map(([k,v])=>k+' => '+v).join('\n');
+  store.set('sa_rules',$('rules').value);store.set('sa_map',$('map').value);
+  return{sn,blank,dups,renamed,H,iD};
+}
+function run(){
+  try{OUT=transform()}catch(e){say(e.message,true);return}
+  $('apply').disabled=false;$('dl').disabled=!window.XLSX;
+  say('Done.');render();
+}
+
+// ---------- display ----------
+const f=n=>n.toLocaleString('en-IN');
+function dmy(s){const d=new Date(Math.round((s-25569)*864e5)),z=n=>String(n).padStart(2,'0');return z(d.getUTCDate())+'-'+z(d.getUTCMonth()+1)+'-'+d.getUTCFullYear()+' '+d.getUTCHours()+':'+z(d.getUTCMinutes())}
+function render(){
+  if(!OUT){$('stats').innerHTML='';$('recon').textContent='';$('tabs').innerHTML='';$('view').innerHTML='<div class="empty">Results appear here once a file is processed.</div>';return}
+  const o=OUT,st=[['Rows scanned',RAW.scanned],['SDFX rows (consolidated)',RAW.rows.length],['Blank SN (Sheet2)',o.blank.length],['Duplicates removed',o.dups.length],['Final with SN (Sheet1)',o.sn.length,1],['Descriptions renamed',o.renamed]];
+  $('stats').innerHTML=st.map(([a,b,k])=>`<div class="stat${k?' k':''}"><span>${a}</span><strong>${f(b)}</strong></div>`).join('');
+  $('recon').textContent=`Check: ${f(o.sn.length)} + ${f(o.dups.length)} + ${f(o.blank.length)} = ${f(o.sn.length+o.dups.length+o.blank.length)} consolidated rows.`;
+  const T=['Sheet1 – with SN','Sheet2 – blank SN','Duplicates removed','Description summary'];
+  $('tabs').innerHTML=T.map((t,i)=>`<button class="tab" role="tab" aria-selected="${i===tab}" data-i="${i}">${t}</button>`).join('');
+  $('tabs').onclick=e=>{const b=e.target.closest('.tab');if(b){tab=+b.dataset.i;render()}};
+  const D=[o.sn,o.blank,o.dups][tab],H=o.H;
+  if(tab===3){
+    const c={};o.sn.forEach(r=>{const k='Sheet1 | '+r[o.iD];c[k]=(c[k]||0)+1});o.blank.forEach(r=>{const k='Sheet2 | '+r[o.iD];c[k]=(c[k]||0)+1});
+    const rows=Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,80);
+    $('view').innerHTML='<table><tr><th>Sheet | Item description</th><th>Rows</th></tr>'+rows.map(([k,v])=>`<tr><td>${esc(k)}</td><td class="n">${f(v)}</td></tr>`).join('')+'</table>';
+    return;
+  }
+  const dc=[H.indexOf('item_lot_date'),H.indexOf('stock_in_date')];
+  $('view').innerHTML=D.length?'<table><tr>'+H.map(h=>`<th>${esc(h)}</th>`).join('')+'</tr>'+D.slice(0,150).map(r=>'<tr>'+r.map((v,i)=>`<td${typeof v==='number'?' class="n"':''}>${v==null?'':dc.includes(i)&&typeof v==='number'?dmy(v):esc(v)}</td>`).join('')+'</tr>').join('')+'</table>':'<div class="empty">No rows in this group.</div>';
+  if(D.length>150)$('view').insertAdjacentHTML('beforeend',`<div class="empty">Showing the first 150 of ${f(D.length)} rows. The download has all of them.</div>`);
+}
+const esc=v=>String(v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+$('apply').onclick=run;
+
+// ---------- download ----------
+function mkSheet(H,rows){
+  const ws={},fm={[H.indexOf('stock_in_date')]:'dd-mm-yyyy h:mm',[H.indexOf('item_lot_date')]:'yyyy-mm-dd hh:mm:ss'},E=XLSX.utils.encode_cell;
+  H.forEach((h,c)=>ws[E({r:0,c})]={t:'s',v:h});
+  rows.forEach((r,i)=>r.forEach((v,c)=>{if(v==null||v==='')return;ws[E({r:i+1,c})]=typeof v==='number'?(fm[c]?{t:'n',v,z:fm[c]}:{t:'n',v}):{t:'s',v:String(v)}}));
+  ws['!ref']=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:rows.length,c:H.length-1}});
+  ws['!autofilter']={ref:ws['!ref']};ws['!cols']=H.map(()=>({wch:20}));
+  return ws;
+}
+$('dl').onclick=()=>{
+  say('Building the Excel file…');$('dl').disabled=true;
+  setTimeout(()=>{
+    try{
+      const wb=XLSX.utils.book_new(),o=OUT;
+      XLSX.utils.book_append_sheet(wb,mkSheet(o.H,o.sn),'Sheet1');
+      XLSX.utils.book_append_sheet(wb,mkSheet(o.H,o.blank),'Sheet2');
+      if($('incDup').checked)XLSX.utils.book_append_sheet(wb,mkSheet(o.H,o.dups),'Duplicates removed');
+      XLSX.writeFile(wb,rawName+'_Processed.xlsx',{compression:true});
+      say('Downloaded '+rawName+'_Processed.xlsx');
+    }catch(e){say('Download failed: '+e.message,true)}
+    $('dl').disabled=false;
+  },30);
+};
+</script>
+</body>
+</html>
